@@ -123,6 +123,8 @@ function MiniChip({ value, onDrag }: { value: number; onDrag: (value: number) =>
 }
 
 function PreciseDisplay({ data, onClose }: { data: PreciseRiskReward; onClose: () => void }) {
+  const isCombined = data.betType.includes("Combined");
+  
   return (
     <>
       <div className="risk-reward-backdrop" onClick={onClose}></div>
@@ -130,19 +132,27 @@ function PreciseDisplay({ data, onClose }: { data: PreciseRiskReward; onClose: (
         <div className="risk-reward-title">{data.betType}</div>
         <div className="risk-reward-stats">
           <div>💰 Total Stake: ${data.stake}</div>
-          {data.winProbability !== "Various" && (
-            <div>🎯 Win Probability: {data.winProbability} ({data.winProbabilityPercent.toFixed(2)}%)</div>
+          
+          {/* RISK/REWARD RATIO - The KEY feature */}
+          <div className="risk-reward-highlight">
+            🎯 RISK/REWARD RATIO: {data.riskRewardRatio}
+          </div>
+          
+          {/* REWARD BANNER - Separate section for dollar amounts */}
+          <div className="reward-banner">
+            💵 POTENTIAL REWARD: $${data.stake} → $${data.bestCase} ({(data.bestCase / data.stake).toFixed(1)}x Return)
+          </div>
+          
+          {!isCombined && data.winProbability !== "Multiple" && (
+            <div>📊 Win Probability: {data.winProbability} ({data.winProbabilityPercent.toFixed(2)}%)</div>
           )}
-          {data.payout > 0 && (
-            <div>💸 Payout Ratio: {data.riskRewardRatio}</div>
-          )}
-          <div className="exact-calculation">📊 Expected Value: ${data.expectedValue.toFixed(4)}</div>
+          <div className="exact-calculation">� Expected Value: ${data.expectedValue.toFixed(4)}</div>
           <div>🏠 House Edge: {(data.houseEdge * 100).toFixed(2)}%</div>
           <div>✅ Best Case: +${data.bestCase}</div>
           <div>❌ Worst Case: ${data.worstCase}</div>
-          {data.betType.includes("Combined") && (
+          {isCombined && (
             <div className="combo-note">
-              📋 This shows combined results for all your bets on the table
+              📋 Combined analysis of all your table bets
             </div>
           )}
         </div>
@@ -241,12 +251,25 @@ export default function RouletteApp() {
       betsByArea.set(bet.areaId, current + bet.amount);
     });
     
-    // Calculate combined expected value and statistics
+    // If only one bet type, use the original precise calculation
+    if (betsByArea.size === 1) {
+      const [areaId, amount] = Array.from(betsByArea.entries())[0];
+      const area = areaMap.get(areaId);
+      if (area) {
+        const bet = { id: 'single', areaId, amount };
+        const precise = calculatePreciseRiskReward(bet, area, slots);
+        setResult(precise);
+        setShowResult(true);
+      }
+      return;
+    }
+    
+    // Multiple bet types - calculate combined results
     let totalStake = 0;
     let totalExpectedValue = 0;
     let bestCaseWin = 0;
     let worstCase = 0;
-    const betResults: Array<{area: string, stake: number, ev: number, winAmount: number}> = [];
+    const betDetails: string[] = [];
     
     betsByArea.forEach((amount, areaId) => {
       const area = areaMap.get(areaId);
@@ -257,27 +280,22 @@ export default function RouletteApp() {
         totalStake += amount;
         totalExpectedValue += precise.expectedValue;
         bestCaseWin += precise.bestCase;
-        worstCase -= amount; // Each bet contributes to worst case loss
+        worstCase -= amount;
         
-        betResults.push({
-          area: area.label,
-          stake: amount,
-          ev: precise.expectedValue,
-          winAmount: precise.bestCase
-        });
+        betDetails.push(`${area.label}: $${amount} (${precise.riskRewardRatio})`);
       }
     });
     
     // Create combined result
     const combinedResult: PreciseRiskReward = {
-      betType: betsByArea.size === 1 ? betResults[0].area : `${betsByArea.size} Combined Bets`,
+      betType: `${betsByArea.size} Combined Bets`,
       stake: totalStake,
-      winProbability: "Various", // Can't easily combine different probabilities
-      winProbabilityPercent: 0, // Will calculate approximate
-      payout: 0, // Multiple payouts
-      riskRewardRatio: `Multiple bets`,
+      winProbability: "Multiple", 
+      winProbabilityPercent: 0,
+      payout: bestCaseWin / totalStake, // Overall payout multiplier
+      riskRewardRatio: `1:${Math.round(bestCaseWin / totalStake)}`, // Clean ratio format
       expectedValue: totalExpectedValue,
-      houseEdge: Math.abs(totalExpectedValue) / totalStake, // Approximate house edge
+      houseEdge: Math.abs(totalExpectedValue) / totalStake,
       bestCase: bestCaseWin,
       worstCase: worstCase
     };
@@ -306,14 +324,35 @@ export default function RouletteApp() {
 
   return (
     <div className="min-h-screen w-full flex flex-col app-wood-bg">
-      {/* Authentic Roulette Table - Takes most of screen */}
-      <div className="flex-1 p-2 flex items-center justify-center">
+      {/* Top calculate button - appears when bets are placed */}
+      {allBets.length > 0 && (
+        <div className="top-calculate-section p-4 bg-black/30">
+          <div className="flex justify-center gap-3 mb-2">
+            <Button 
+              onClick={calculateRiskReward} 
+              size="lg" 
+              className="calculate-button px-8 py-3 text-lg font-bold"
+            >
+              🎯 Calculate Risk/Reward
+            </Button>
+            <Button onClick={clearBet} size="sm" variant="secondary" className="px-4">
+              Clear All
+            </Button>
+          </div>
+          <div className="text-center text-white">
+            <div className="text-lg font-bold">
+              Total Bets: ${totalBetAmount} • {allBets.length} bet{allBets.length > 1 ? 's' : ''} placed
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compact Authentic Roulette Table */}
+      <div className="flex-1 p-1 flex items-start justify-center pt-2">
         <div className="w-full max-w-sm mx-auto">
           {/* European Roulette Layout */}
-          <div className="roulette-table bg-green-800 border-4 border-yellow-600 rounded-lg p-2">
-            
-            {/* Zero section */}
-            <div className="roulette-zeros mb-2">
+          <div className="roulette-table bg-green-800 border-4 border-yellow-600 rounded-lg p-2">{/* Zero section */}
+            <div className="roulette-zeros mb-1">
               <Cell 
                 color="green" 
                 onDrop={handleDrop("straight-0")} 
@@ -442,29 +481,29 @@ export default function RouletteApp() {
         </div>
       </div>
       
-      {/* Minimal bottom UI */}
+      {/* Enhanced bottom UI with centered chips and prominent Calculate button */}
       <div className="minimal-ui">
-        <div className="flex items-center justify-between">
-          <div className="flex gap-2">
+        {/* Centered chips section */}
+        <div className="flex justify-center mb-4">
+          <div className="flex gap-4 bg-black/50 p-4 rounded-lg border-2 border-yellow-500/30">
             {CHIP_VALUES.map(value => (
               <MiniChip key={value} value={value} onDrag={setChipValue} />
             ))}
           </div>
-          <div className="text-white text-sm mb-2">
-            {totalBetAmount > 0 ? `Total Bets: $${totalBetAmount}` : 'Drag chips to table'}
+        </div>
+        
+        {/* Status and prominent Calculate button */}
+        <div className="flex flex-col items-center gap-3">
+          <div className="text-white text-center">
+            <div className="text-lg font-bold mb-1">
+              {totalBetAmount > 0 ? `Total Bets: $${totalBetAmount}` : 'Select chips and place your bets!'}
+            </div>
+            <div className="text-sm text-gray-300">
+              {allBets.length === 0 ? 'Drag chips from above to the roulette table' : `${allBets.length} bet${allBets.length > 1 ? 's' : ''} placed`}
+            </div>
           </div>
-          <div className="flex gap-2">
-            {allBets.length > 0 && (
-              <Button onClick={calculateRiskReward} size="sm" variant="default" className="bg-green-600 hover:bg-green-700">
-                Calculate Risk/Reward
-              </Button>
-            )}
-            {allBets.length > 0 && (
-              <Button onClick={clearBet} size="sm" variant="secondary">
-                Clear All
-              </Button>
-            )}
-          </div>
+          
+          {/* Additional action buttons if needed can go here */}
         </div>
       </div>
       
