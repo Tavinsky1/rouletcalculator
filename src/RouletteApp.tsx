@@ -1,27 +1,250 @@
-import React, { useMemo, useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Toggle } from "@/components/ui/toggle";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { X, Trash2, PieChart, Info, Sparkles } from "lucide-react";
-import { motion } from "framer-motion";
-
 /**
- * Roulette Win Probability & Risk/Reward Calculator — Fancy Felt Skin
- * - European (single-zero) and American (double-zero) modes
- * - Drag chips (1,5,10,25,50,100,200,500) to betting areas on the table
- * - All common inside & outside bets with correct payouts
- * - Per-bet analytics and overall EV, win/loss probabilities per spin
- * - Casino-style fancy skin: felt texture, gold trim, glossy cells, colored chips
- *
- * Single-file React component. Default export is <RouletteApp />.
+ * Mobile-First Authentic Roulette Risk/Reward Calculator
+ * Focus: Visual roulette table + precise risk calculations
  */
+
+// ---- Config ----
+const CHIP_VALUES = [1, 5, 10, 25, 50, 100];
+
+const COLORS: Record<number | "0" | "00", "red" | "black" | "green"> = {
+  0: "green", "00": "green",
+  1: "red", 2: "black", 3: "red", 4: "black", 5: "red", 6: "black",
+  7: "red", 8: "black", 9: "red", 10: "black", 11: "black", 12: "red",
+  13: "black", 14: "red", 15: "black", 16: "red", 17: "black", 18: "red",
+  19: "red", 20: "black", 21: "red", 22: "black", 23: "red", 24: "black",
+  25: "red", 26: "black", 27: "red", 28: "black", 29: "black", 30: "red",
+  31: "black", 32: "red", 33: "black", 34: "red", 35: "black", 36: "red",
+};
+
+// ---- Types ----
+export type WheelType = "european" | "american";
+export type Slot = number | "0" | "00";
+export type BetArea = {
+  id: string;
+  label: string;
+  covered: Slot[];
+  payout: number;
+  kind: "inside" | "outside" | "special";
+};
+export type PlacedBet = { id: string; areaId: string; amount: number; };
+
+// ---- Build betting areas ----
+export function buildBetAreas(wheel: WheelType): BetArea[] {
+  const slots = wheel === "european" ? 
+    ["0", ...Array.from({length: 36}, (_, i) => i + 1)] :
+    ["0", ...Array.from({length: 36}, (_, i) => i + 1), "00"];
+  
+  const onlyNums = slots.filter(s => typeof s === "number") as number[];
+  const areas: BetArea[] = [];
+  
+  // Straights
+  slots.forEach(n => {
+    areas.push({ id: `straight-${n}`, label: `${n}`, covered: [n], payout: 35, kind: "inside" });
+  });
+  
+  // Outside bets (most common)
+  const reds = onlyNums.filter(n => COLORS[n] === "red");
+  const blacks = onlyNums.filter(n => COLORS[n] === "black");
+  
+  areas.push(
+    { id: "red", label: "Red", covered: reds, payout: 1, kind: "outside" },
+    { id: "black", label: "Black", covered: blacks, payout: 1, kind: "outside" },
+    { id: "even", label: "Even", covered: onlyNums.filter(n => n % 2 === 0), payout: 1, kind: "outside" },
+    { id: "odd", label: "Odd", covered: onlyNums.filter(n => n % 2 === 1), payout: 1, kind: "outside" },
+    { id: "low", label: "1-18", covered: onlyNums.filter(n => n <= 18), payout: 1, kind: "outside" },
+    { id: "high", label: "19-36", covered: onlyNums.filter(n => n >= 19), payout: 1, kind: "outside" },
+    { id: "dozen-1", label: "1st 12", covered: onlyNums.slice(0, 12), payout: 2, kind: "outside" },
+    { id: "dozen-2", label: "2nd 12", covered: onlyNums.slice(12, 24), payout: 2, kind: "outside" },
+    { id: "dozen-3", label: "3rd 12", covered: onlyNums.slice(24, 36), payout: 2, kind: "outside" }
+  );
+  
+  return areas;
+}
+
+// ---- UI Components ----
+function Cell({ children, color, onDrop, onDragOver, className = "" }: { 
+  children: React.ReactNode; 
+  color?: "red" | "black" | "green"; 
+  onDrop?: (e: React.DragEvent) => void; 
+  onDragOver?: (e: React.DragEvent) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      className={`cell-base ${color ? `cell-${color}` : 'cell-neutral'} ${className}`}
+    >
+      <span className="cell-label">{children}</span>
+    </div>
+  );
+}
+
+function MiniChip({ value, onDrag }: { value: number; onDrag: (value: number) => void }) {
+  const handleDragStart = (e: React.DragEvent) => {
+    e.dataTransfer.setData("text/plain", String(value));
+    onDrag(value);
+  };
+  
+  return (
+    <div
+      draggable
+      onDragStart={handleDragStart}
+      className={`chip-mini chip-${value} cursor-grab active:cursor-grabbing`}
+    >
+      {value}
+    </div>
+  );
+}
+
+function PreciseDisplay({ data, onClose }: { data: PreciseRiskReward; onClose: () => void }) {
+  return (
+    <div className="risk-reward-display">
+      <div className="risk-reward-title">{data.betType}</div>
+      <div className="risk-reward-stats">
+        <div>Stake: ${data.stake}</div>
+        <div>Win Probability: {data.winProbability} ({data.winProbabilityPercent.toFixed(2)}%)</div>
+        <div>Payout: {data.riskRewardRatio}</div>
+        <div className="exact-calculation">Expected Value: ${data.expectedValue.toFixed(4)}</div>
+        <div>House Edge: {(data.houseEdge * 100).toFixed(2)}%</div>
+        <div>Best Case: +${data.bestCase}</div>
+        <div>Worst Case: ${data.worstCase}</div>
+      </div>
+      <Button onClick={onClose} className="mt-4">
+        <X className="w-4 h-4 mr-2" />Close
+      </Button>
+    </div>
+  );
+}
+
+// ---- Main App ----
+export default function RouletteApp() {
+  const [wheel] = useState<WheelType>("european"); // Focus on European for simplicity
+  const areas = useMemo(() => buildBetAreas(wheel), [wheel]);
+  const slots = useMemo(() => (wheel === "european" ? 37 : 38), [wheel]);
+  
+  const [currentBet, setCurrentBet] = useState<PlacedBet | null>(null);
+  const [chipValue, setChipValue] = useState(10);
+  const [showResult, setShowResult] = useState(false);
+  const [result, setResult] = useState<PreciseRiskReward | null>(null);
+  
+  const areaMap = useMemo(() => new Map(areas.map(a => [a.id, a])), [areas]);
+  
+  const handleDrop = (areaId: string) => (e: React.DragEvent) => {
+    e.preventDefault();
+    const value = Number(e.dataTransfer.getData("text/plain"));
+    if (!value) return;
+    
+    const bet: PlacedBet = { id: `${areaId}-${Date.now()}`, areaId, amount: value };
+    setCurrentBet(bet);
+    
+    // Calculate immediately
+    const area = areaMap.get(areaId);
+    if (area) {
+      const precise = calculatePreciseRiskReward(bet, area, slots);
+      setResult(precise);
+      setShowResult(true);
+    }
+  };
+  
+  const allowDrop = (e: React.DragEvent) => e.preventDefault();
+  
+  const clearBet = () => {
+    setCurrentBet(null);
+    setShowResult(false);
+    setResult(null);
+  };
+
+  return (
+    <div className="min-h-screen w-full flex flex-col app-wood-bg">
+      {/* Authentic Roulette Table - Takes most of screen */}
+      <div className="flex-1 p-2 flex items-center justify-center">
+        <div className="w-full max-w-sm mx-auto">
+          {/* European Roulette Layout */}
+          <div className="roulette-table bg-green-800 border-4 border-yellow-600 rounded-lg p-2">
+            
+            {/* Zero section */}
+            <div className="roulette-zeros mb-2">
+              <Cell color="green" onDrop={handleDrop("straight-0")} onDragOver={allowDrop}>
+                0
+              </Cell>
+            </div>
+            
+            {/* Main number grid (3x12) - authentic casino layout */}
+            <div className="roulette-grid mb-2">
+              {/* Row 3: 3,6,9,12... */}
+              {Array.from({length: 12}, (_, i) => 3 + i * 3).reverse().map(n => (
+                <Cell key={n} color={COLORS[n]} onDrop={handleDrop(`straight-${n}`)} onDragOver={allowDrop}>
+                  {n}
+                </Cell>
+              ))}
+              {/* Row 2: 2,5,8,11... */}
+              {Array.from({length: 12}, (_, i) => 2 + i * 3).reverse().map(n => (
+                <Cell key={n} color={COLORS[n]} onDrop={handleDrop(`straight-${n}`)} onDragOver={allowDrop}>
+                  {n}
+                </Cell>
+              ))}
+              {/* Row 1: 1,4,7,10... */}
+              {Array.from({length: 12}, (_, i) => 1 + i * 3).reverse().map(n => (
+                <Cell key={n} color={COLORS[n]} onDrop={handleDrop(`straight-${n}`)} onDragOver={allowDrop}>
+                  {n}
+                </Cell>
+              ))}
+            </div>
+            
+            {/* Outside bets */}
+            <div className="outside-bets grid-cols-6 gap-1">
+              <Cell onDrop={handleDrop("low")} onDragOver={allowDrop} className="text-xs">1-18</Cell>
+              <Cell onDrop={handleDrop("even")} onDragOver={allowDrop} className="text-xs">Even</Cell>
+              <Cell onDrop={handleDrop("red")} onDragOver={allowDrop} className="text-xs bg-red-600">◆</Cell>
+              <Cell onDrop={handleDrop("black")} onDragOver={allowDrop} className="text-xs bg-black">◆</Cell>
+              <Cell onDrop={handleDrop("odd")} onDragOver={allowDrop} className="text-xs">Odd</Cell>
+              <Cell onDrop={handleDrop("high")} onDragOver={allowDrop} className="text-xs">19-36</Cell>
+            </div>
+            
+            {/* Dozens */}
+            <div className="outside-bets grid-cols-3 gap-1 mt-1">
+              <Cell onDrop={handleDrop("dozen-1")} onDragOver={allowDrop} className="text-xs">1st 12</Cell>
+              <Cell onDrop={handleDrop("dozen-2")} onDragOver={allowDrop} className="text-xs">2nd 12</Cell>
+              <Cell onDrop={handleDrop("dozen-3")} onDragOver={allowDrop} className="text-xs">3rd 12</Cell>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Minimal bottom UI */}
+      <div className="minimal-ui">
+        <div className="flex items-center justify-between">
+          <div className="flex gap-2">
+            {CHIP_VALUES.map(value => (
+              <MiniChip key={value} value={value} onDrag={setChipValue} />
+            ))}
+          </div>
+          <div className="text-white text-sm">
+            {currentBet ? `Bet: $${currentBet.amount}` : 'Drag chip to table'}
+          </div>
+          {currentBet && (
+            <Button onClick={clearBet} size="sm" variant="secondary">
+              Clear
+            </Button>
+          )}
+        </div>
+      </div>
+      
+      {/* Precise Risk/Reward Display */}
+      {showResult && result && (
+        <PreciseDisplay data={result} onClose={() => setShowResult(false)} />
+      )}
+    </div>
+  );
+}
 
 // ---- Config ----
 const DENOMINATIONS = [1, 5, 10, 25, 50, 100, 200, 500];
 
 const COLORS: Record<number | "0" | "00", "red" | "black" | "green"> = {
   0: "green",
+  "00": "green",
   1: "red", 2: "black", 3: "red", 4: "black", 5: "red", 6: "black",
   7: "red", 8: "black", 9: "red", 10: "black", 11: "black", 12: "red",
   13: "black", 14: "red", 15: "black", 16: "red", 17: "black", 18: "red",
@@ -156,31 +379,23 @@ function Cell({ children, color, onDrop, onDragOver }: { children: React.ReactNo
       onDrop={onDrop}
       onDragOver={onDragOver}
       className={classNames(
-        "relative flex items-center justify-center text-sm md:text-base font-semibold rounded-xl select-none h-12 md:h-14",
-        "shadow-[inset_0_2px_0_rgba(255,255,255,0.15),inset_0_-3px_8px_rgba(0,0,0,0.35),0_6px_14px_rgba(0,0,0,0.25)] border-2",
-        color === "red" && "bg-gradient-to-br from-[#b01919] to-[#6f0d0d] text-white border-[#e7b66a]",
-        color === "black" && "bg-gradient-to-br from-[#1f1f1f] to-[#0b0b0b] text-white border-[#e7b66a]",
-        color === "green" && "bg-gradient-to-br from-[#116b3a] to-[#0a4425] text-white border-[#e7b66a]",
-        !color && "bg-gradient-to-br from-[#1a7a3e] to-[#0f5730] text-white border-[#e7b66a]"
+        "cell-base",
+        color === "red" && "cell-red",
+        color === "black" && "cell-black",
+        color === "green" && "cell-green",
+        !color && "cell-neutral"
       )}
-      style={{
-        backgroundImage:
-          color
-            ? undefined
-            : "repeating-linear-gradient(45deg, rgba(255,255,255,0.06) 0 2px, rgba(0,0,0,0.05) 2px 4px)",
-      }}
     >
-      <span className="drop-shadow-sm tracking-wide">{children}</span>
-      <div className="pointer-events-none absolute inset-0 rounded-xl" style={{
-        background: "linear-gradient(to bottom, rgba(255,255,255,0.18), rgba(255,255,255,0.02) 40%, rgba(0,0,0,0.15) 95%)"
-      }} />
+      <span className="cell-label">{children}</span>
+      <div className="cell-gloss" />
     </div>
   );
 }
 
-function Chip({ value }: { value: number }) {
+function Chip({ value, disabled = false }: { value: number; disabled?: boolean }) {
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", String(value));
+    e.dataTransfer.effectAllowed = "move";
   };
   const palette: Record<string, string> = {
     "1": "from-[#f9fafb] to-[#e5e7eb] text-neutral-900 border-neutral-300",
@@ -195,28 +410,21 @@ function Chip({ value }: { value: number }) {
   const color = palette[String(value)] || palette["1"];
   return (
     <motion.div
-      draggable
-      onDragStart={handleDragStart}
+      draggable={!disabled}
+  onDragStart={disabled ? undefined : (handleDragStart as any)}
       whileHover={{ y: -2 }}
       whileTap={{ scale: 0.96 }}
+      aria-hidden={disabled}
       className={classNames(
-        "relative w-12 h-12 md:w-14 md:h-14 rounded-full shadow-xl border-2 font-extrabold flex items-center justify-center text-sm md:text-base",
-        `bg-gradient-to-br ${color}`
+        "chip-base",
+        `chip-${value}`,
+        disabled && "chip-disabled"
       )}
-      style={{
-        boxShadow:
-          "inset 0 2px 0 rgba(255,255,255,.45), inset 0 -3px 8px rgba(0,0,0,.35), 0 6px 14px rgba(0,0,0,.25)",
-      }}
     >
-      <div className="absolute inset-1 rounded-full border-2 border-white/40" />
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className="drop-shadow-sm">{value}</span>
-      </div>
-      <div className="pointer-events-none absolute -inset-[1px] rounded-full" style={{
-        background:
-          "radial-gradient(circle at 30% 25%, rgba(255,255,255,0.55), rgba(255,255,255,0.0) 40%)",
-      }} />
-    </motion.div>
+      <div className="chip-ring" />
+  <div className="chip-face"><span>{value}</span></div>
+      <div className="chip-shine" />
+  </motion.div>
   );
 }
 
@@ -303,13 +511,39 @@ export default function RouletteApp() {
     setActiveAreaId(areaId);
   }
 
+  // --- Responsive board scaling (mobile full-fit) ---
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const scaleRef = useRef<HTMLDivElement | null>(null);
+  const [boardScale, setBoardScale] = useState(1);
+
+  useEffect(() => {
+    function recomputeScale() {
+      const outerW = window.innerWidth;
+      const outerH = window.innerHeight;
+      const boardEl = boardRef.current;
+      if (!boardEl) return;
+      // intrinsic size
+      const rect = boardEl.getBoundingClientRect();
+      const intrinsicW = rect.width / boardScale; // remove previous scale
+      const intrinsicH = rect.height / boardScale;
+      // desired padding margin
+      const pad = 16; // px
+      const maxW = outerW - pad * 2;
+      const maxH = outerH * 0.55; // allocate portion of height for board (adjust as needed)
+      const s = Math.min(1, Math.min(maxW / intrinsicW, maxH / intrinsicH));
+      setBoardScale(s);
+    }
+    recomputeScale();
+    window.addEventListener('resize', recomputeScale);
+    return () => window.removeEventListener('resize', recomputeScale);
+  }, [boardScale]);
+
   return (
-    <div className="min-h-screen w-full p-4 md:p-8" style={{ backgroundImage: 'linear-gradient(180deg,#2c1b10 0%,#1b110b 40%,#140d08 100%)' }}>
+    <div className="min-h-screen w-full p-4 md:p-8 app-wood-bg">
       <div className="relative mx-auto max-w-7xl space-y-4 md:space-y-6">
         {/* Glow header */}
-        <div className="relative rounded-2xl p-4 md:p-6 border-4 border-[#e7b66a] bg-[#0e5a31] text-white shadow-2xl"
-             style={{ backgroundImage: "radial-gradient(circle at 30% 20%, rgba(255,255,255,0.08), rgba(0,0,0,0.0) 40%), repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0 2px, rgba(0,0,0,0.03) 2px 4px)" }}>
-          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+        <div className="relative rounded-2xl gold-border header-card felt-bg text-white shadow-2xl">
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 header-inner">
             <div>
               <h1 className="text-2xl md:text-3xl font-extrabold tracking-wide flex items-center gap-2">
                 <Sparkles className="w-6 h-6"/> Royale Roulette — Probability & Risk/Reward
@@ -331,57 +565,53 @@ export default function RouletteApp() {
 
         {/* Chips row */}
         <Card className="shadow-xl border-4 border-[#e7b66a] rounded-2xl overflow-hidden">
-          <CardContent className="p-3 md:p-4 bg-[#0e5a31]" style={{ backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 2px, rgba(0,0,0,0.04) 2px 4px)" }}>
+          <CardContent className="p-3 md:p-4 felt-bg">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-sm text-emerald-50/90">Chips:</span>
               {DENOMINATIONS.map((v) => (
-                <Chip key={v} value={v} />
+                <Chip key={v} value={v} disabled={locked} />
               ))}
             </div>
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Table */}
-          <Card className="lg:col-span-2 shadow-2xl border-4 border-[#e7b66a] rounded-2xl overflow-hidden">
-            <CardContent className="p-0">
-              {/* Felt frame */}
-              <div className="p-3 md:p-4 bg-[#0e5a31]" style={{
-                backgroundImage:
-                  "radial-gradient(circle at 30% 20%, rgba(255,255,255,0.08), rgba(0,0,0,0.0) 40%), repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0 2px, rgba(0,0,0,0.03) 2px 4px)",
-                boxShadow: "inset 0 8px 24px rgba(0,0,0,0.35)",
-              }}>
-                <div className="space-y-3">
-                  <div className="flex gap-3">
+          <Card className="lg:col-span-2 shadow-2xl border-4 border-[#e7b66a] rounded-2xl overflow-hidden board-outer">
+            <CardContent className="p-2 sm:p-3 md:p-4">
+              <div className="mobile-board-container">
+                <div ref={scaleRef} className={`board-scale-wrapper ${boardScale>=0.97? 'scale-100': boardScale>=0.92? 'scale-95': boardScale>=0.87? 'scale-90': boardScale>=0.82? 'scale-85': boardScale>=0.77? 'scale-80': boardScale>=0.72? 'scale-75': boardScale>=0.67? 'scale-70': boardScale>=0.62? 'scale-65':'scale-60'}`}>
+                  <div ref={boardRef} className="felt-bg felt-inset p-2 sm:p-3 md:p-4 rounded-xl space-y-3">
+                    <div className="flex gap-2 sm:gap-3">
                     {/* Zero / Double Zero */}
-                    <div className="w-16 flex flex-col gap-2">
+                      <div className="w-14 sm:w-16 flex flex-col gap-2">
                       <Cell color="green" onDrop={handleDropOnArea(straightAreaId("0"))} onDragOver={allowDrop}>0</Cell>
                       {wheel === "american" && (
                         <Cell color="green" onDrop={handleDropOnArea(straightAreaId("00"))} onDragOver={allowDrop}>00</Cell>
                       )}
-                    </div>
+                      </div>
 
-                    {/* 1–36 grid */}
-                    <div className="grid grid-cols-3 gap-2 flex-1">
+                      {/* 1–36 grid */}
+                      <div className="grid grid-cols-3 gap-2 flex-1">
                       {Array.from({ length: 36 }, (_, i) => 36 - i).map((n) => (
                         <Cell key={n} color={COLORS[n]} onDrop={handleDropOnArea(straightAreaId(n))} onDragOver={allowDrop}>
                           {n}
                         </Cell>
                       ))}
-                    </div>
+                      </div>
 
-                    {/* Column bets */}
-                    <div className="w-28 flex flex-col gap-2">
+                      {/* Column bets */}
+                      <div className="w-24 sm:w-28 flex flex-col gap-2">
                       {[1, 2, 3].map((i) => (
                         <Cell key={i} onDrop={handleDropOnArea(`col-${i}`)} onDragOver={allowDrop}>
                           Col {i}
                         </Cell>
                       ))}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Dozens & Even-Money row */}
-                  <div className="grid grid-cols-3 gap-2">
+                    {/* Dozens & Even-Money row */}
+                    <div className="grid grid-cols-3 gap-2">
                     {[
                       { id: "dozen-1", label: "1st 12" },
                       { id: "dozen-2", label: "2nd 12" },
@@ -389,8 +619,8 @@ export default function RouletteApp() {
                     ].map((d) => (
                       <Cell key={d.id} onDrop={handleDropOnArea(d.id)} onDragOver={allowDrop}>{d.label}</Cell>
                     ))}
-                  </div>
-                  <div className="grid grid-cols-6 gap-2">
+                    </div>
+                    <div className="grid grid-cols-6 gap-2">
                     {[
                       { id: "low", label: "1-18" },
                       { id: "even", label: "Even" },
@@ -401,13 +631,14 @@ export default function RouletteApp() {
                     ].map((d) => (
                       <Cell key={d.id} onDrop={handleDropOnArea(d.id)} onDragOver={allowDrop}>{d.label}</Cell>
                     ))}
-                  </div>
-
-                  {wheel === "american" && (
-                    <div>
-                      <Cell onDrop={handleDropOnArea("topline")} onDragOver={allowDrop}>0-00-1-2-3 (Top Line)</Cell>
                     </div>
-                  )}
+
+                    {wheel === "american" && (
+                      <div>
+                        <Cell onDrop={handleDropOnArea("topline")} onDragOver={allowDrop}>0-00-1-2-3 (Top Line)</Cell>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -415,8 +646,8 @@ export default function RouletteApp() {
 
           {/* Sidebar */}
           <div className="space-y-4">
-            <Card className="shadow-xl border-4 border-[#e7b66a] rounded-2xl overflow-hidden">
-              <CardContent className="p-3 md:p-4 bg-[#0e5a31]" style={{ backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 2px, rgba(0,0,0,0.04) 2px 4px)" }}>
+        <Card className="shadow-xl border-4 border-[#e7b66a] rounded-2xl overflow-hidden">
+          <CardContent className="p-3 md:p-4 felt-bg">
                 <div className="flex items-center justify-between">
                   <h2 className="font-semibold text-emerald-50">Your Bet</h2>
                   <span className="text-sm text-emerald-100/90">Mode: Single-run calculator</span>
@@ -446,7 +677,7 @@ export default function RouletteApp() {
             </Card>
 
             <Card className="shadow-xl border-4 border-[#e7b66a] rounded-2xl overflow-hidden">
-              <CardContent className="p-3 md:p-4 bg-[#0e5a31]" style={{ backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 2px, rgba(0,0,0,0.04) 2px 4px)" }}>
+              <CardContent className="p-3 md:p-4 felt-bg">
                 <div className="flex items-center gap-2 text-white"><Info className="w-4 h-4"/><h2 className="font-semibold">Compound Bet Toolbox</h2></div>
                 <Tabs defaultValue="inside">
                   <TabsList className="grid grid-cols-3 w-full">
@@ -476,31 +707,39 @@ export default function RouletteApp() {
                 </Tabs>
               </CardContent>
             </Card>
-
-            <Card className="shadow-xl border-4 border-[#e7b66a] rounded-2xl overflow-hidden">
-              <CardContent className="p-3 md:p-4 bg-[#0e5a31]" style={{ backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 2px, rgba(0,0,0,0.04) 2px 4px)" }}>
-                <div className="flex items-center gap-2 text-white"><PieChart className="w-4 h-4"/><h2 className="font-semibold">Result</h2></div>
-                {activeArea && perBetStats && placed.length === 1 ? (
-                  <div className="text-sm space-y-2 text-emerald-50">
-                    <div className="font-medium">Bet: {activeArea.label} ({activeArea.kind})</div>
-                    <div>Numbers covered: <b>{activeArea.covered.length}</b> / {slotsCount}</div>
-                    <div>Win probability: <b>{(perBetStats.pWin * 100).toFixed(2)}%</b> ({perBetStats.pWin.toFixed(4)})</div>
-                    <div>Payout: <b>{activeArea.payout}:1</b> • Risk/Reward: <b>{perBetStats.rr}</b></div>
-                    <div>Stake: <b>{perBetStats.stake}</b> • Win profit if it hits: <b>{perBetStats.profitIfWin}</b></div>
-                    <div className="pt-1 border-t border-white/20">Expected value (EV) for this spin: <b>{perBetStats.ev.toFixed(3)}</b></div>
-                    {!locked && <p className="text-emerald-100/80">Press <b>Calculate</b> to freeze this result. Use <b>Reset</b> to start over.</p>}
-                  </div>
-                ) : (
-                  <p className="text-sm text-emerald-100/80">Set a bet and click <b>Calculate</b> to see the result.</p>
-                )}
-              </CardContent>
-            </Card>
           </div>
         </div>
 
         <footer className="text-xs text-emerald-100/80 text-center pt-2">
           Payouts: Straight 35:1, Split 17:1, Street 11:1, Corner 8:1, Line 5:1, Dozen/Column 2:1, Even-money 1:1. American adds 00 and Top Line 6:1.
         </footer>
+        {locked && activeArea && perBetStats && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <div className="modal-card">
+              <div className="modal-header">
+                <div className="flex items-center gap-2"><PieChart className="w-5 h-5"/><div className="modal-title">Result — {activeArea.label}</div></div>
+                <div>
+                  <Button variant="secondary" onClick={() => { setLocked(false); setPlaced([]); }}>Reset</Button>
+                  <Button onClick={() => setLocked(false)}><X className="w-4 h-4"/></Button>
+                </div>
+              </div>
+              <div className="modal-content">
+                <div className="text-emerald-50">
+                  <div className="font-medium">Bet: {activeArea.label} ({activeArea.kind})</div>
+                  <div className="mt-2">Numbers covered: <b>{activeArea.covered.length}</b> / {slotsCount}</div>
+                  <div>Win probability: <b>{(perBetStats.pWin * 100).toFixed(2)}%</b></div>
+                  <div>Payout: <b>{activeArea.payout}:1</b> • Risk/Reward: <b>{perBetStats.rr}</b></div>
+                  <div className="pt-2">Stake: <b>{perBetStats.stake}</b> • Win profit if it hits: <b>{perBetStats.profitIfWin}</b></div>
+                  <div className="pt-3 border-t border-white/20">Expected value (EV) for this spin: <b>{perBetStats.ev.toFixed(3)}</b></div>
+                </div>
+              </div>
+              <div className="modal-actions">
+                <Button variant="secondary" onClick={() => { setLocked(false); }}>Close</Button>
+                <Button onClick={() => { setLocked(false); setPlaced([]); }}>New Bet</Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
